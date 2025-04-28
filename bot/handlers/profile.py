@@ -4,7 +4,8 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardRemove
-from bot.keyboards.inline import get_goal_keyboard, get_dietary_restrictions_keyboard
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from bot.keyboards.inline import get_goal_keyboard
 from bot.services.database import DatabaseService
 import logging
 
@@ -18,18 +19,27 @@ GOAL_MAP = {
     'maintain': 'Поддержание'
 }
 
-DIET_MAP = {
-    'vegan': 'Веган',
-    'gluten_free': 'Без глютена',
-    'omnivore': 'Всёяден'
+GENDER_MAP = {
+    'male': 'Мужской',
+    'female': 'Женский'
 }
 
 class ProfileStates(StatesGroup):
     waiting_for_age = State()
+    waiting_for_gender = State()
     waiting_for_weight = State()
     waiting_for_height = State()
     waiting_for_goal = State()
-    waiting_for_dietary_restrictions = State()
+
+def get_gender_keyboard() -> InlineKeyboardMarkup:
+    """Create gender selection keyboard"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Мужской", callback_data="gender:male"),
+            InlineKeyboardButton(text="Женский", callback_data="gender:female")
+        ]
+    ])
+    return keyboard
 
 @router.message(Command("profile"))
 async def cmd_profile(message: Message, state: FSMContext):
@@ -40,6 +50,7 @@ async def cmd_profile(message: Message, state: FSMContext):
         # Load existing profile data into state
         await state.update_data(
             age=existing_profile['age'],
+            gender=existing_profile['gender'],
             weight=existing_profile['weight'],
             height=existing_profile['height']
         )
@@ -64,13 +75,31 @@ async def process_age(message: Message, state: FSMContext):
         if not (15 <= age <= 100):
             raise ValueError
         await state.update_data(age=age)
-        await state.set_state(ProfileStates.waiting_for_weight)
+        await state.set_state(ProfileStates.waiting_for_gender)
         await message.answer(
-            "Отлично! Теперь введите ваш вес в килограммах (30-180):"
+            "Отлично! Теперь выберите ваш пол:",
+            reply_markup=get_gender_keyboard()
         )
     except ValueError:
         await message.answer(
             "Пожалуйста, введите корректный возраст (15-100):"
+        )
+
+@router.callback_query(ProfileStates.waiting_for_gender)
+async def process_gender(callback: CallbackQuery, state: FSMContext):
+    """Process gender selection"""
+    try:
+        gender = callback.data.split(":")[1]
+        await state.update_data(gender=gender)
+        await state.set_state(ProfileStates.waiting_for_weight)
+        await callback.message.answer(
+            "Отлично! Теперь введите ваш вес в килограммах (30-180):"
+        )
+    except Exception as e:
+        logging.error(f"Error in process_gender: {e}")
+        await callback.message.answer(
+            "❌ Произошла ошибка при обработке выбора. Пожалуйста, попробуйте снова.",
+            reply_markup=get_gender_keyboard()
         )
 
 @router.message(ProfileStates.waiting_for_weight)
@@ -115,26 +144,6 @@ async def process_goal(callback: CallbackQuery, state: FSMContext):
         goal = callback.data.split(":")[1]
         logging.info(f"Selected goal: {goal}")
         await state.update_data(goal=goal)
-        await state.set_state(ProfileStates.waiting_for_dietary_restrictions)
-        await callback.message.answer(
-            "Выберите пищевые ограничения:",
-            reply_markup=get_dietary_restrictions_keyboard()
-        )
-    except Exception as e:
-        logging.error(f"Error in process_goal: {e}")
-        await callback.message.answer(
-            "❌ Произошла ошибка при обработке выбора. Пожалуйста, попробуйте снова.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        await state.clear()
-
-@router.callback_query(ProfileStates.waiting_for_dietary_restrictions)
-async def process_dietary_restrictions(callback: CallbackQuery, state: FSMContext):
-    """Process dietary restrictions selection"""
-    try:
-        # Get the dietary restriction from callback data
-        dietary_restrictions = callback.data.split(":")[1]
-        logging.info(f"Selected dietary restrictions: {dietary_restrictions}")
         
         # Get all profile data
         profile_data = await state.get_data()
@@ -148,10 +157,10 @@ async def process_dietary_restrictions(callback: CallbackQuery, state: FSMContex
                 "✅ Ваш профиль успешно сохранен!\n\n"
                 f"📊 Ваш профиль:\n"
                 f"👤 Возраст: {profile_data['age']} лет\n"
+                f"👤 Пол: {GENDER_MAP.get(profile_data['gender'], profile_data['gender'])}\n"
                 f"⚖️ Вес: {profile_data['weight']} кг\n"
                 f"📏 Рост: {profile_data['height']} см\n"
-                f"🎯 Цель: {GOAL_MAP.get(profile_data['goal'], profile_data['goal'])}\n"
-                f"🥗 Пищевые ограничения: {DIET_MAP.get(dietary_restrictions, dietary_restrictions)}\n\n"
+                f"🎯 Цель: {GOAL_MAP.get(profile_data['goal'], profile_data['goal'])}\n\n"
                 "Вы можете изменить профиль в любой момент, используя команду /profile"
             )
             
@@ -166,7 +175,7 @@ async def process_dietary_restrictions(callback: CallbackQuery, state: FSMContex
                 reply_markup=ReplyKeyboardRemove()
             )
     except Exception as e:
-        logging.error(f"Error in process_dietary_restrictions: {e}")
+        logging.error(f"Error in process_goal: {e}")
         await callback.message.answer(
             "❌ Произошла ошибка при обработке выбора. Пожалуйста, попробуйте снова.",
             reply_markup=ReplyKeyboardRemove()

@@ -18,10 +18,10 @@ class DatabaseService:
                     CREATE TABLE IF NOT EXISTS user_profiles (
                         user_id INTEGER PRIMARY KEY,
                         age INTEGER,
+                        gender TEXT,
                         weight INTEGER,
                         height INTEGER,
                         goal TEXT,
-                        dietary_restrictions TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
@@ -47,6 +47,21 @@ class DatabaseService:
                         FOREIGN KEY (user_id) REFERENCES user_profiles(user_id)
                     )
                 """)
+                # Create meals table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS meals (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER,
+                        type TEXT,
+                        name TEXT,
+                        calories INTEGER,
+                        protein INTEGER,
+                        carbs INTEGER,
+                        fat INTEGER,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (user_id) REFERENCES user_profiles(user_id)
+                    )
+                """)
                 conn.commit()
                 logging.info("Database initialized successfully")
         except Exception as e:
@@ -61,15 +76,15 @@ class DatabaseService:
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT OR REPLACE INTO user_profiles 
-                    (user_id, age, weight, height, goal, dietary_restrictions)
+                    (user_id, age, gender, weight, height, goal)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (
                     user_id,
                     data['age'],
+                    data['gender'],
                     data['weight'],
                     data['height'],
-                    data['goal'],
-                    data['dietary_restrictions']
+                    data['goal']
                 ))
                 conn.commit()
                 logging.info("Profile saved successfully")
@@ -85,7 +100,7 @@ class DatabaseService:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT age, weight, height, goal, dietary_restrictions
+                    SELECT age, gender, weight, height, goal
                     FROM user_profiles
                     WHERE user_id = ?
                 """, (user_id,))
@@ -94,10 +109,10 @@ class DatabaseService:
                 if result:
                     profile = {
                         'age': result[0],
-                        'weight': result[1],
-                        'height': result[2],
-                        'goal': result[3],
-                        'dietary_restrictions': result[4]
+                        'gender': result[1],
+                        'weight': result[2],
+                        'height': result[3],
+                        'goal': result[4]
                     }
                     logging.info(f"Found profile: {profile}")
                     return profile
@@ -107,13 +122,13 @@ class DatabaseService:
             logging.error(f"Error getting profile: {e}")
             return None
 
-    def update_subscription(self, user_id: int, plan: str) -> bool:
+    def update_subscription(self, user_id: int, plan: str, duration_days: int) -> bool:
         """Update user subscription"""
         try:
-            logging.info(f"Updating subscription for user {user_id} with plan {plan}")
+            logging.info(f"Updating subscription for user {user_id} with plan {plan} for {duration_days} days")
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                end_date = datetime.now().timestamp() + (30 * 24 * 60 * 60)
+                end_date = datetime.now().timestamp() + (duration_days * 24 * 60 * 60)
                 cursor.execute("""
                     INSERT OR REPLACE INTO subscriptions 
                     (user_id, plan, end_date, is_active)
@@ -191,4 +206,60 @@ class DatabaseService:
                 return history
         except Exception as e:
             logging.error(f"Error getting generation history: {e}")
-            return [] 
+            return []
+
+    def get_user_meals(self, user_id: int, limit: int = 5) -> List[Dict]:
+        """Get user's recent meals"""
+        try:
+            logging.info(f"Getting meals for user {user_id} with limit {limit}")
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT type, name, calories, protein, carbs, fat, created_at
+                    FROM meals
+                    WHERE user_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, (user_id, limit))
+                results = cursor.fetchall()
+                
+                meals = [{
+                    'type': r[0],
+                    'name': r[1],
+                    'calories': r[2],
+                    'protein': r[3],
+                    'carbs': r[4],
+                    'fat': r[5],
+                    'timestamp': r[6]
+                } for r in results]
+                logging.info(f"Found {len(meals)} meals")
+                return meals
+        except Exception as e:
+            logging.error(f"Error getting user meals: {e}")
+            return []
+
+    def save_meal(self, user_id: int, meal_data: Dict) -> bool:
+        """Save a meal to the database"""
+        try:
+            logging.info(f"Saving meal for user {user_id}: {meal_data}")
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO meals 
+                    (user_id, type, name, calories, protein, carbs, fat)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    user_id,
+                    meal_data['type'],
+                    meal_data['name'],
+                    meal_data['calories'],
+                    meal_data['protein'],
+                    meal_data['carbs'],
+                    meal_data['fat']
+                ))
+                conn.commit()
+                logging.info("Meal saved successfully")
+            return True
+        except Exception as e:
+            logging.error(f"Error saving meal: {e}")
+            return False 

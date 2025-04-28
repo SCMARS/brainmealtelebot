@@ -6,6 +6,7 @@ from aiogram.fsm.state import State, StatesGroup
 from bot.services.database import DatabaseService
 from bot.services.gemini import GeminiService
 from bot.keyboards.inline import get_meal_type_keyboard
+import logging
 
 router = Router()
 db = DatabaseService()
@@ -25,6 +26,9 @@ async def cmd_generate_day(message: Message, state: FSMContext):
             "❌ У вас еще нет профиля. Пожалуйста, создайте его с помощью команды /profile"
         )
         return
+
+    # Get existing meals for the day
+    existing_meals = db.get_user_meals(message.from_user.id, limit=5)  # Get last 5 meals
 
     await state.set_state(GenerateStates.waiting_for_meal_type)
     await message.answer(
@@ -50,6 +54,9 @@ async def cmd_generate_week(message: Message, state: FSMContext):
             "Используйте команду /subscribe для оформления подписки."
         )
         return
+
+    # Get existing meals for the week
+    existing_meals = db.get_user_meals(message.from_user.id, limit=20)  # Get last 20 meals
 
     await state.set_state(GenerateStates.waiting_for_meal_type)
     await message.answer(
@@ -102,39 +109,20 @@ async def process_calories(message: Message, state: FSMContext):
         # Generate meal plan
         await message.answer("🔄 Генерирую план питания...")
         
-        prompt = f"""
-        Создай {'недельный' if is_weekly else 'дневной'} план питания со следующими параметрами:
-        - Возраст: {profile['age']} лет
-        - Вес: {profile['weight']} кг
-        - Рост: {profile['height']} см
-        - Цель: {profile['goal']}
-        - Пищевые ограничения: {profile['dietary_restrictions']}
-        - Калории в день: {calories}
-        - Тип питания: {meal_type}
+        # Add calories to profile
+        profile['calories'] = calories
         
-        План должен включать:
-        1. Завтрак
-        2. Обед
-        3. Ужин
-        4. Перекусы (2-3 раза в день)
+        # Get existing meals
+        existing_meals = db.get_user_meals(message.from_user.id, limit=20 if is_weekly else 5)
         
-        Для каждого приема пищи укажи:
-        - Название блюда
-        - Количество калорий
-        - Примерный состав
-        - Время приема пищи
+        # Generate meal plan
+        meal_plan = await gemini.generate_meal_plan(profile, 7 if is_weekly else 1, existing_meals)
         
-        Форматируй ответ в виде структурированного текста с эмодзи.
-        """
-        
-        meal_plan = await gemini.generate_text(prompt)
-        
-        # Save generation history
-        db.save_generation(
-            message.from_user.id,
-            'weekly' if is_weekly else 'daily',
-            calories
-        )
+        # Check if response is an error message
+        if meal_plan.startswith("❌"):
+            await message.answer(meal_plan)
+            await state.clear()
+            return
         
         # Split long message if needed
         if len(meal_plan) > 4000:
@@ -143,6 +131,13 @@ async def process_calories(message: Message, state: FSMContext):
                 await message.answer(part)
         else:
             await message.answer(meal_plan)
+            
+        # Save generation history
+        db.save_generation(
+            message.from_user.id,
+            'weekly' if is_weekly else 'daily',
+            calories
+        )
             
         await state.clear()
         
